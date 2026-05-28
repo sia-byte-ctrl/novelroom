@@ -657,6 +657,15 @@ window.addEventListener('load', ()=>{
   if(saved){ gdriveToken = saved; gdriveUpdateUI(); }
 });
 
+// 5분마다 드라이브 자동 저장
+setInterval(async ()=>{
+  if(gdriveToken){
+    saveCurContent();
+    save();
+    await gdriveSave();
+  }
+}, 5 * 60 * 1000);
+
 function showErr(msg){const e=document.getElementById('err-msg');e.textContent='⚠ '+msg;e.style.display='';}
 function hideErr(){document.getElementById('err-msg').style.display='none';}
 function openM(id){document.getElementById(id).classList.add('show');}
