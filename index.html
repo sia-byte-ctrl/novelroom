@@ -193,6 +193,8 @@ button{cursor:pointer;font-family:inherit;font-size:13px;border-radius:7px;borde
   .gen-actions button{font-size:10px;padding:4px 6px}
 }
 </style>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="https://apis.google.com/js/api.js"></script>
 </head>
 <body>
 <div id="app">
@@ -354,6 +356,19 @@ button{cursor:pointer;font-family:inherit;font-size:13px;border-radius:7px;borde
         <button class="btn-ghost" onclick="exportData()">📤 JSON 백업</button>
         <button class="btn-ghost" onclick="importData()">📥 백업 불러오기</button>
         <button class="btn-danger" onclick="clearAllData()">🗑 전체 삭제</button>
+      </div>
+    </div>
+    <div style="background:var(--bg3);border:1px solid var(--border);border-radius:12px;padding:20px;margin-top:14px">
+      <h3 style="font-size:15px;font-weight:600;margin-bottom:6px">☁ 구글 드라이브 동기화</h3>
+      <p style="font-size:12px;color:var(--text3);margin-bottom:14px;line-height:1.6">구글 드라이브에 자동 저장하면 어느 기기에서든 데이터를 불러올 수 있어요.</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <button class="btn-ghost" id="gdrive-login-btn" onclick="gdriveLogin()">🔗 구글 드라이브 연결</button>
+        <button class="btn-gold" id="gdrive-save-btn" onclick="gdriveSave()" style="display:none">☁ 드라이브에 저장</button>
+        <button class="btn-ghost" id="gdrive-load-btn" onclick="gdriveLoad()" style="display:none">📂 드라이브에서 불러오기</button>
+        <button class="btn-ghost" id="gdrive-logout-btn" onclick="gdriveLogout()" style="display:none;font-size:11px;color:var(--text3)">연결 해제</button>
+      </div>
+      <div id="gdrive-status" style="font-size:12px;margin-top:10px;color:var(--text3)"></div>
+    <div style="display:none">
       </div>
     </div>
   </div>
@@ -521,6 +536,126 @@ function exportData(){const a=document.createElement('a');a.href='data:applicati
 function importData(){document.getElementById('import-file').click();}
 function doImport(input){if(!input.files||!input.files[0])return;const r=new FileReader();r.onload=e=>{try{const p=JSON.parse(e.target.result);if(p.books){S.books=p.books;save();alert(`✅ ${p.books.length}개 작품을 불러왔습니다.`);gotoShelf();}}catch(err){alert('파일 형식이 올바르지 않습니다.');}};r.readAsText(input.files[0]);}
 function clearAllData(){if(!confirm('모든 데이터를 삭제할까요?'))return;localStorage.removeItem(STORE);S.books=[];S.curBook=null;S.apiKey='';gotoShelf();}
+
+// ── 구글 드라이브 연동 ──────────────────────────
+const GDRIVE_CLIENT_ID = '1024487440359-ifep6msqnlloi5t9pklfleh1edb1k57a.apps.googleusercontent.com';
+const GDRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
+const GDRIVE_FILE_KEY = 'nr_gdrive_file_id';
+let gdriveToken = null;
+let gdriveReady = false;
+
+function gdriveSetStatus(msg, color='var(--text3)'){
+  const el = document.getElementById('gdrive-status');
+  if(el){ el.textContent = msg; el.style.color = color; }
+}
+
+function gdriveUpdateUI(){
+  const connected = !!gdriveToken;
+  document.getElementById('gdrive-login-btn').style.display = connected ? 'none' : '';
+  document.getElementById('gdrive-save-btn').style.display = connected ? '' : 'none';
+  document.getElementById('gdrive-load-btn').style.display = connected ? '' : 'none';
+  document.getElementById('gdrive-logout-btn').style.display = connected ? '' : 'none';
+  if(connected) gdriveSetStatus('✅ 구글 드라이브 연결됨', 'var(--teal)');
+  else gdriveSetStatus('');
+}
+
+function gdriveLogin(){
+  const client = google.accounts.oauth2.initTokenClient({
+    client_id: GDRIVE_CLIENT_ID,
+    scope: GDRIVE_SCOPE,
+    callback: (resp) => {
+      if(resp.error){ gdriveSetStatus('❌ 로그인 실패: '+resp.error, 'var(--rose)'); return; }
+      gdriveToken = resp.access_token;
+      localStorage.setItem('nr_gdrive_token', gdriveToken);
+      gdriveUpdateUI();
+    }
+  });
+  client.requestAccessToken();
+}
+
+function gdriveLogout(){
+  if(gdriveToken) google.accounts.oauth2.revoke(gdriveToken);
+  gdriveToken = null;
+  localStorage.removeItem('nr_gdrive_token');
+  localStorage.removeItem(GDRIVE_FILE_KEY);
+  gdriveUpdateUI();
+  gdriveSetStatus('연결이 해제됐습니다.');
+}
+
+async function gdriveSave(){
+  if(!gdriveToken){ gdriveLogin(); return; }
+  gdriveSetStatus('저장 중...', 'var(--gold)');
+  try{
+    const data = JSON.stringify({books: S.books});
+    const fileId = localStorage.getItem(GDRIVE_FILE_KEY);
+    let url, method;
+    if(fileId){
+      url = `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`;
+      method = 'PATCH';
+    } else {
+      // 파일 먼저 생성
+      const meta = await fetch('https://www.googleapis.com/drive/v3/files', {
+        method: 'POST',
+        headers: {'Authorization':'Bearer '+gdriveToken, 'Content-Type':'application/json'},
+        body: JSON.stringify({name:'novelroom_backup.json', mimeType:'application/json'})
+      });
+      const metaJson = await meta.json();
+      if(metaJson.error) throw new Error(metaJson.error.message);
+      localStorage.setItem(GDRIVE_FILE_KEY, metaJson.id);
+      url = `https://www.googleapis.com/upload/drive/v3/files/${metaJson.id}?uploadType=media`;
+      method = 'PATCH';
+    }
+    const r = await fetch(url, {
+      method,
+      headers: {'Authorization':'Bearer '+gdriveToken, 'Content-Type':'application/json'},
+      body: data
+    });
+    if(!r.ok) throw new Error('저장 실패');
+    gdriveSetStatus('✅ 드라이브에 저장됐습니다! ('+new Date().toLocaleTimeString()+')', 'var(--teal)');
+  }catch(e){
+    if(e.message.includes('401')||e.message.includes('invalid')){
+      gdriveToken=null; gdriveUpdateUI();
+      gdriveSetStatus('⚠ 로그인이 만료됐습니다. 다시 연결해주세요.', 'var(--rose)');
+    } else {
+      gdriveSetStatus('❌ 오류: '+e.message, 'var(--rose)');
+    }
+  }
+}
+
+async function gdriveLoad(){
+  if(!gdriveToken){ gdriveLogin(); return; }
+  gdriveSetStatus('불러오는 중...', 'var(--gold)');
+  try{
+    // novelroom_backup.json 파일 검색
+    const search = await fetch("https://www.googleapis.com/drive/v3/files?q=name%3D'novelroom_backup.json'&spaces=drive&fields=files(id,name,modifiedTime)", {
+      headers: {'Authorization':'Bearer '+gdriveToken}
+    });
+    const searchJson = await search.json();
+    if(!searchJson.files || searchJson.files.length === 0){
+      gdriveSetStatus('⚠ 드라이브에 저장된 데이터가 없습니다.', 'var(--rose)'); return;
+    }
+    const fileId = searchJson.files[0].id;
+    localStorage.setItem(GDRIVE_FILE_KEY, fileId);
+    const file = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
+      headers: {'Authorization':'Bearer '+gdriveToken}
+    });
+    const json = await file.json();
+    if(json.books){
+      S.books = json.books;
+      save();
+      gdriveSetStatus('✅ 불러오기 완료! ('+searchJson.files[0].modifiedTime.slice(0,10)+')', 'var(--teal)');
+      gotoShelf();
+    }
+  }catch(e){
+    gdriveSetStatus('❌ 오류: '+e.message, 'var(--rose)');
+  }
+}
+
+// 페이지 로드 시 토큰 복원 시도
+window.addEventListener('load', ()=>{
+  const saved = localStorage.getItem('nr_gdrive_token');
+  if(saved){ gdriveToken = saved; gdriveUpdateUI(); }
+});
 
 function showErr(msg){const e=document.getElementById('err-msg');e.textContent='⚠ '+msg;e.style.display='';}
 function hideErr(){document.getElementById('err-msg').style.display='none';}
