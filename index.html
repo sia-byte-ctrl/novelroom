@@ -613,9 +613,33 @@ async function gdriveSave(){
     if(!r.ok) throw new Error('저장 실패');
     gdriveSetStatus('✅ 드라이브에 저장됐습니다! ('+new Date().toLocaleTimeString()+')', 'var(--teal)');
   }catch(e){
-    if(e.message.includes('401')||e.message.includes('invalid')){
-      gdriveToken=null; gdriveUpdateUI();
-      gdriveSetStatus('⚠ 로그인이 만료됐습니다. 다시 연결해주세요.', 'var(--rose)');
+    if(e.message.includes('401')||e.message.includes('invalid')||e.message.includes('실패')){
+      // 토큰 만료 시 자동 재연결 시도
+      gdriveToken=null;
+      gdriveSetStatus('🔄 토큰 만료, 자동 재연결 중...', 'var(--gold)');
+      try{
+        await new Promise((resolve, reject)=>{
+          const client = google.accounts.oauth2.initTokenClient({
+            client_id: GDRIVE_CLIENT_ID,
+            scope: GDRIVE_SCOPE,
+            prompt: '',
+            callback: (resp)=>{
+              if(resp.error){ reject(resp.error); return; }
+              gdriveToken = resp.access_token;
+              localStorage.setItem('nr_gdrive_token', gdriveToken);
+              resolve();
+            }
+          });
+          client.requestAccessToken();
+        });
+        gdriveUpdateUI();
+        await gdriveSave();
+      }catch(re){
+        gdriveToken=null;
+        localStorage.removeItem('nr_gdrive_token');
+        gdriveUpdateUI();
+        gdriveSetStatus('⚠ 자동 재연결 실패. 다시 연결해주세요.', 'var(--rose)');
+      }
     } else {
       gdriveSetStatus('❌ 오류: '+e.message, 'var(--rose)');
     }
